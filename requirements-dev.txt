@@ -1,0 +1,2 @@
+# Includes runtime dependencies through the editable package metadata.
+-e .[dev]

@@ -1,0 +1,35 @@
+# Local environment and credentials
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Python and tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Rebuildable local data; preserve directory placeholders
+data/processed/*
+!data/processed/.gitkeep
+data/manifests/*
+!data/manifests/.gitkeep
+data/indexes/*
+!data/indexes/.gitkeep
+data/evaluation/*
+!data/evaluation/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Editors and operating systems
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
