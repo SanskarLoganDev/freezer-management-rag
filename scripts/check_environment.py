@@ -11,6 +11,7 @@ from urllib.request import urlopen
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true", help="Skip the Ollama connection check")
+    parser.add_argument("--no-env", action="store_true", help="Never open/read a .env file")
     args = parser.parse_args()
 
     if sys.version_info < (3, 11):
@@ -22,12 +23,15 @@ def main() -> int:
     try:
         from freezer_rag.config import Settings
 
-        settings = Settings()
+        settings = Settings(_env_file=None if args.no_env else ".env")
     except ImportError as exc:
-        print(f"FAIL: Missing dependency: {exc}. Install requirements-dev.txt.", file=sys.stderr)
+        print(f"FAIL: Missing dependency: {exc}. Install requirements.txt.", file=sys.stderr)
         return 1
-    except ValueError as exc:
-        print(f"FAIL: Invalid RAG configuration: {exc}", file=sys.stderr)
+    except ValueError:
+        print(
+            "FAIL: Invalid RAG configuration; check the selected model and settings.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Python: {sys.version.split()[0]}")

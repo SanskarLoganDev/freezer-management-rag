@@ -1,12 +1,12 @@
-# Planned test coverage
+# Focused test coverage
 
-Add tests as behavior is implemented:
+The suite covers the meaningful boundaries of the phases 1-3 implementation:
 
 - Ingestion: PDF page provenance, table/requirement boundaries, oversized operation splitting, safe local YAML references, and malformed-source handling.
 - Indexing: stable chunk IDs, repeat-ingestion idempotency, removal of deleted chunks, persistence, and refusal to query incompatible model/dimension manifests.
 - Retrieval: exact endpoint and requirement-ID lookup, paraphrases, deduplication, and context budgets.
 - Generation: citation ID validation, unsupported claims, insufficient evidence, conflicting source passages, and injected instructions in source text.
 - Integration: mocked Ollama responses, timeouts, missing models, and dimension mismatch; opt-in live local smoke checks.
-- Future Core adapter: verified caller context, pagination, RESERVED/OCCUPIED distinction, backend failures, and explicit confirmation before any write workflow.
+- Terminal: command handling, recoverable request failures, source display, and context reset.
 
-No RAG test suite exists yet. The scaffold has Python compilation, package/source metadata, and evaluation-record checks. Run the environment checker after installing dependencies to validate configuration and local model availability; full inference and retrieval checks belong to the later implementation phases.
+Run `.\.venv\Scripts\python.exe -m pytest -q`. The 12 test cases use the real supplied documents for extraction checks, temporary local indexes for persistence/retrieval checks, and mocked Ollama responses. They do not require running models or a model-comparison dataset. An automatic fixture fails if dotenv file loading is attempted. Use explicit `Settings(_env_file=None)` in tests. Live terminal smoke checks use `--no-env` separately. Regression checks cover follow-up query handling, bounded history, and retaining stated durations in evidence excerpts.
