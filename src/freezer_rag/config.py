@@ -6,7 +6,7 @@ Loading settings does not contact Ollama or create an index.
 
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, Field, model_validator
+from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=120, gt=0)
     max_question_chars: int = Field(default=2000, ge=1)
     max_history_turns: int = Field(default=3, ge=0, le=10)
+
+    @field_validator("llm_model", "embedding_model")
+    @classmethod
+    def model_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Model name cannot be empty")
+        return value
 
     @model_validator(mode="after")
     def validate_retrieval_settings(self) -> "Settings":

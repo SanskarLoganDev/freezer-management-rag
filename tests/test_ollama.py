@@ -72,3 +72,61 @@ def test_embedding_retries_only_transient_errors_and_reports_missing_model(monke
         assert attempts == ["/api/embed", "/api/embed"]
         with pytest.raises(RagError, match="ollama pull"):
             ollama.model(settings.embedding_model)
+
+
+def test_base_model_environment_override_drives_generation_and_rejects_embedding_model(monkeypatch):
+    monkeypatch.setenv("RAG_LLM_MODEL", "different-local-model:4b")
+    settings = Settings(_env_file=None)
+    requests = []
+    capabilities = ["completion"]
+
+    def respond(request):
+        payload = json.loads(request.content) if request.content else {}
+        requests.append((request.url.path, payload))
+        if request.url.path == "/api/tags":
+            return httpx.Response(
+                200, json={"models": [{"name": settings.llm_model, "digest": "different-digest"}]}
+            )
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": capabilities})
+        return httpx.Response(
+            200, json={"done": True, "done_reason": "stop", "message": {"content": '{"ok":true}'}}
+        )
+
+    with httpx.Client(
+        base_url="http://ollama.test", transport=httpx.MockTransport(respond)
+    ) as client:
+        ollama = Ollama(settings, client)
+        assert ollama.chat([{"role": "user", "content": "answer"}], {}) == '{"ok":true}'
+        assert requests[-1][1]["model"] == "different-local-model:4b"
+        assert "think" not in requests[-1][1]
+        ollama._info.clear()
+        capabilities[:] = ["embedding"]
+        with pytest.raises(RagError, match="cannot generate chat"):
+            ollama.chat([], {})
+
+
+def test_transport_timeout_and_truncated_generation_are_recoverable():
+    settings = Settings(_env_file=None)
+
+    def timeout(request):
+        raise httpx.ReadTimeout("local request timed out", request=request)
+
+    with httpx.Client(
+        base_url="http://ollama.test", transport=httpx.MockTransport(timeout)
+    ) as client:
+        with pytest.raises(RagError, match="timeout"):
+            Ollama(settings, client).request("POST", "/api/chat", {})
+
+    with httpx.Client(
+        base_url="http://ollama.test",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"done": True, "done_reason": "length", "message": {"content": "partial"}}
+            )
+        ),
+    ) as client:
+        ollama = Ollama(settings, client)
+        ollama.check_chat_model = lambda: {"capabilities": ["completion"]}
+        with pytest.raises(RagError, match="budget|incomplete|truncated"):
+            ollama.chat([], {})

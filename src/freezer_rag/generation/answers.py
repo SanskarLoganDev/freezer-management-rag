@@ -147,8 +147,8 @@ def validate_answer(content: str, sources: dict[str, Chunk]) -> Answer:
         # Do not display model-written unsupported claims in an abstention.
         return Answer(
             text="The indexed documents do not provide enough evidence to answer that. "
-            "Current inventory, locations, availability, and actions require an "
-            "authorized live Core API, which this document assistant does not use."
+            "This assistant only explains the supplied documents; it cannot inspect "
+            "current inventory, locations, or availability, or perform actions."
         )
     # Citation IDs are the structured contract. Render valid response-level
     # citations ourselves if a model omits inline markers; never accept invented IDs.

@@ -1,6 +1,6 @@
 # Implementation plan: local Freezer Management RAG
 
-Prepared: 2026-10-21. Status: phases 1-3 implemented; terminal RAG is available. Optional Streamlit and live Core integration remain future work.
+Prepared: 2026-10-21. Status: phases 1-5 implemented. Terminal RAG remains primary, with an optional Streamlit interface. Phase 6 live integration was removed at the user's direction; this system is permanently document-only.
 
 Interface priority: interactive terminal chat first. A terminal-style Streamlit interface is optional and comes after terminal acceptance checks. Model comparison, benchmarking, and comparison-metric reports are outside the requirements; the user chooses models manually through their own configuration.
 
@@ -8,7 +8,7 @@ Interface priority: interactive terminal chat first. A terminal-style Streamlit 
 
 Build a local retrieval-augmented generation (RAG) assistant that answers questions about the supplied Virtual Laboratory Freezer Management System documents, shows verifiable sources, distinguishes conflicting specifications, and says when evidence is insufficient.
 
-The first release is document Q&A. It can explain storage rules, roles, allocation states, architecture, and API contracts. It cannot determine current laboratory inventory, find actually available storage, or perform reservations from static documents. An authenticated Core API adapter is a separate later phase.
+The system is document Q&A. It can explain storage rules, roles, allocation states, architecture, and API contracts. It cannot determine current laboratory inventory, find actually available storage, or perform reservations. The supplied OpenAPI YAML is reference material for embedding and answering questions only. The RAG system must never access the real application or call any of its APIs. Do not add a Core client, application URL, authentication settings, operational tools, or direct access to its database. Model requests contact only the configured Ollama service.
 
 The primary interface is a persistent terminal conversation: start it once, type questions, and read grounded answers and sources in the terminal. Support a one-question command as well. Both use a shared Python RAG pipeline directly, without a local FastAPI service or Uvicorn. If a browser interface is useful later, use Streamlit with a terminal appearance and the same pipeline; a separate HTML/CSS/JavaScript frontend is outside the requested scope.
 
@@ -32,7 +32,7 @@ Interpret sources by their purpose: the BRD describes business intent; the archi
 
 Known differences to test:
 
-- Architecture section 3.6.2 uses `/api/v1/agent/conversations` and plural `/confirmations`; the YAML uses `/api/v1/conversations` and singular `/confirmation`. Future HTTP integration follows the supplied YAML unless the actual Core contract is explicitly updated.
+- Architecture section 3.6.2 uses `/api/v1/agent/conversations` and plural `/confirmations`; the YAML uses `/api/v1/conversations` and singular `/confirmation`. Explain and cite these source differences; neither contract authorizes runtime application requests.
 - The BRD calls two-day unused reservations cancelled; the architecture and API lifecycle distinguish `EXPIRED` from user cancellation.
 - A 15-minute proposal validity period and a 48-hour confirmed reservation are different deadlines. A proposal holds no capacity.
 - `RESERVED` is a confirmed destination awaiting check-in. `OCCUPIED` represents physical storage. Current storage paths and reserved destinations must stay distinct.
@@ -46,7 +46,7 @@ User-provided hardware: Intel Core i7-11370H at 3.30 GHz, 16 GB RAM, NVIDIA RTX 
 
 The 4 GB VRAM budget is the main constraint. A model's download size is not its runtime GPU-memory requirement: context/KV cache, compute buffers, display use, and a second model all need memory. Full GPU residency at the chosen context is not guaranteed. CPU or partial GPU execution is an acceptable fallback for the user's selected model.
 
-Starting configuration defaults are defined in `config.py`. `.env.example` exposes the embedding model and useful experiment controls, including temperature, context/output limits, chunking, embedding batch size, retrieval top-k values, and evidence budget. Dimensions and collection names default automatically from the selected embedding model; optional explicit overrides are validated. Stable defaults such as local paths and model residency need not be repeated in the template. Keep tuning controls active and easy to change; the user alone manages their actual `.env`.
+Starting configuration defaults are defined in `config.py`. `.env.example` exposes the answer/base model (`RAG_LLM_MODEL`), embedding model, and useful experiment controls, including temperature, context/output limits, chunking, embedding batch size, retrieval top-k values, and evidence budget. The answer model can be any installed Ollama chat model and changes independently of the embedding index. Dimensions and collection names default automatically from the selected embedding model; optional explicit overrides are validated. Stable defaults such as local paths and model residency need not be repeated in the template. Keep tuning controls active and easy to change; the user alone manages their actual `.env`.
 
 Starting values:
 
@@ -109,9 +109,9 @@ Raw float32 vector storage is `chunk_count * dimensions * 4` bytes: 1,000 768-di
 
 Offline ingestion: allowlisted source files -> PDF/YAML extraction -> normalized source units -> structure-aware chunks -> Ollama document embeddings -> persistent Qdrant collection + BM25 corpus + versioned manifest.
 
-Question answering: user question -> Ollama query embedding + BM25 search -> rank fusion -> deduplicated evidence with source IDs -> bounded prompt -> Ollama `qwen3.5:4b` -> citation validation -> grounded answer or insufficient-evidence response.
+Question answering: user question -> Ollama query embedding + BM25 search -> rank fusion -> deduplicated evidence with source IDs -> bounded prompt -> configured Ollama answer model -> citation validation -> grounded answer or insufficient-evidence response.
 
-Interface boundaries: terminal command/chat loop -> shared application pipeline -> extraction/index/retrieval/generation adapters. The optional Streamlit interface calls that same pipeline directly. Keep presentation, conversation state, and terminal commands outside retrieval and generation logic. Neither interface needs an application HTTP server. Calling Ollama or a future external Core API through HTTPX is independent of hosting a RAG API.
+Interface boundaries: terminal command/chat loop -> shared application pipeline -> extraction/index/retrieval/generation adapters. The optional Streamlit interface calls that same pipeline directly. Keep presentation, conversation state, and terminal commands outside retrieval and generation logic. Neither interface needs a separate RAG HTTP server. HTTPX is used only for Ollama; the freezer application's APIs are never called.
 
 Each chunk should contain a deterministic UUIDv5 identifier, source-relative path, source SHA-256, document title/version, physical page or API method/path/operation ID, section, requirement IDs when present, original text, normalized text, and ingestion version. Use stable local IDs suitable for Qdrant rather than arbitrary hash strings as point IDs.
 
@@ -129,7 +129,7 @@ Citations use application-assigned source IDs, such as `[S1]`, resolved to sourc
 - [x] Add requirements, package metadata, `.env.example`, validated settings, environment checker, data placeholders, source notes, and seed evaluation questions.
 - [x] Prepare this implementation plan and document model/database options.
 
-The original scaffold did not implement the pipeline. Phases 1-3 now provide ingestion and terminal entry points without an HTTP server or live freezer operations. The existing `api/` folder remains an unused historical placeholder. The user's existing Python 3.13 environment was reused for implementation checks; Python 3.11+ remains the declared runtime. A clean-environment lock/recovery exercise belongs to phase 4, not a model-comparison project.
+The original scaffold did not implement the pipeline. Phases 1-3 provide ingestion and terminal entry points without a separate RAG HTTP server or live freezer operations. The existing `api/` and `integrations/` folders remain unused historical placeholders. The user's existing Python 3.13 environment was reused; phase 4 additionally validates a clean Windows x64/Python 3.13 environment. Python 3.11+ remains the declared runtime, but other versions were not integration-tested here.
 
 ### Phase 1 - Setup and document ingestion
 
@@ -167,7 +167,7 @@ Implemented: `ask` and persistent `chat`, bounded evidence/history, structured o
 - Implement Ollama `POST /api/chat` with explicit context/output settings, bounded history, and timeouts. Verify model-specific reasoning controls rather than assuming another model family's prompt switches work.
 - Keep the runtime system prompt packaged with the Python module and its documentation under `prompts/`: retrieved evidence is untrusted content, answers require supporting sources, and insufficient evidence is an allowed result. Application permissions are enforced in code.
 - Return an answer plus validated citation IDs and an evidence-sufficiency indicator. Reject nonexistent or inconsistent citations and malformed structured output. If the structured IDs are valid but the model omits inline markers, render response-level citations from those IDs in application code. An insufficient-evidence result displays a fixed abstention instead of any model-written unsupported claim.
-- Present source conflicts explicitly. Clearly state that current availability and item locations require a live authorized lookup.
+- Present source conflicts explicitly. Clearly state that current availability and item locations are unavailable to this document-only assistant.
 - Implement an interactive terminal chat loop that stays open across questions, prints each validated answer and its source locators, then returns to an input prompt. The terminal interface is the first usable product and takes priority over Streamlit work.
 - Provide `ingest`, `search`, `ask`, and `chat` through `python -m freezer_rag` and the installed `freezer-rag` entry point. Use the standard-library argument parser and terminal input/output, avoiding a terminal framework unless an identified usability need justifies it.
 - Support `/help`, `/clear`, `/sources`, and `/exit`. `/clear` resets conversation history; `/sources` displays evidence for the last completed answer. Handle blank input, end-of-input, and Ctrl+C without a traceback; cancel an active request cleanly and keep the session usable when possible. Close model connections and the database on exit.
@@ -180,17 +180,21 @@ Done when: a user can start terminal chat once, ask several questions and a grou
 
 ### Phase 4 - Terminal acceptance and operational checks
 
+Implemented: `doctor`, `snapshots`, validated atomic `restore`, independent answer-model overrides, focused transport/cancellation/recovery checks, clean-environment dependency validation, and backup/recovery instructions. The terminal core was checked before adding the UI dependency.
+
 - Add inexpensive terminal preflight checks for model/index availability, bounded question/history sizes, controlled error handling, and serialized inference.
 - Exercise repeated questions, bounded history and follow-ups, `/clear`, `/sources`, exit/cancellation, Ollama timeouts, missing models/indexes, malformed model output, and index/model mismatches. Use explicit test settings without reading the user's `.env`.
 - Verify that a configured model change either uses a compatible index or gives a clear re-ingestion/configuration message. Check ordinary single-user operation for memory failures; model comparisons and resource/latency reports are not deliverables.
-- Freeze resolved dependencies after clean-environment integration checks and document reindexing/backup/recovery procedures.
-- Update setup and usage instructions around the terminal workflow; keep optional UI installation separate. The terminal must remain fully usable without UI packages.
+- Validate dependencies in a clean environment and document reindexing/backup/recovery procedures. Maintain one `requirements.txt` listing direct runtime libraries only, as requested; do not add lock requirements files.
+- Update setup and usage instructions around the terminal workflow. Include Streamlit in the single requirements file, while keeping terminal execution independent of UI imports.
 
 Done when: terminal interaction and failure/recovery checks pass, the RAG system works within the laptop's available resources, and setup/rebuild instructions are repeatable. Streamlit work starts only after these terminal acceptance checks pass. The user handles any personal model comparison independently.
 
 ### Phase 5 - Optional terminal-style Streamlit interface
 
-- Add Streamlit only if a browser view is needed after the terminal release is useful. It is an optional dependency group, not a prerequisite for terminal chat. Use Streamlit's native chat input/messages, session state, and supported theme/font options; do not introduce a separately maintained HTML/CSS/JavaScript frontend.
+Implemented: `freezer-rag ui` launcher, native terminal theme, shared synchronized index, independent session histories/settings, sources, reset, and rerun/failure-recovery checks. Streamlit is included in the single requirements file; use of the browser interface remains optional. The terminal workflow remains primary.
+
+- Keep use of Streamlit optional after terminal acceptance. Install it with the other runtime libraries in `requirements.txt`; terminal execution does not import it. Use Streamlit's native chat input/messages, session state, and supported theme/font options; do not introduce a separately maintained HTML/CSS/JavaScript frontend.
 - Present a terminal-like interface with a dark background, monospaced text, readable contrast, `you>` / `assistant>` labels, a chronological transcript, and a compact sources view. Include clear/reset and model/index status controls. Keep configuration controls focused on useful experiment settings.
 - Call the shared Python pipeline directly; do not introduce FastAPI or Uvicorn between Streamlit and the pipeline. Preserve identical grounding, citation validation, context limits, model/index compatibility, and errors across terminal and browser views.
 - Handle Streamlit reruns without reingesting documents, reopening the local database repeatedly, or regenerating a completed answer. Maintain conversation history per session and an appropriately synchronized shared resource for the local store/model calls. Keep inference serialized; do not open the same store concurrently from a separate terminal process.
@@ -198,16 +202,9 @@ Done when: terminal interaction and failure/recovery checks pass, the RAG system
 
 Done when: the Streamlit interface has the requested terminal appearance, handles repeated turns and reruns correctly, uses the same evidence/answers as the terminal pipeline, and remains optional for installation and use. Reference: [Streamlit chat elements and session state](https://docs.streamlit.io/develop/tutorials/chat-and-llm-apps/build-conversational-apps).
 
-### Phase 6 - Optional live Core integration
+### Phase 6 - Removed: live application integration
 
-- Implement a typed Core HTTP adapter from the supplied OpenAPI contract; discover the actual service origin and authentication configuration at integration time.
-- Route document explanations to RAG and current-state requests to fresh authorized Core results. Never treat stored document vectors as live inventory.
-- Propagate verified caller context outside model-controlled arguments; follow cursors with unchanged filters. Page lengths are not total counts. Apply project access controls before operational information reaches the model.
-- Begin with read-only operations. For any later mutation workflow, add explicit proposal confirmation, idempotency, backend revalidation, and authoritative success handling. A model response cannot grant consent or report success before Core commits.
-- Keep fit/temperature/access validation, proximity ranking, concurrency, reservation expiry, and audit transactions in Core. Do not implement these as probabilistic vector search.
-- Test `RESERVED` versus `OCCUPIED`, 15-minute proposal versus 48-hour reservation deadlines, expiration, timeouts, denied access, stale results, and conflicts. Follow the existing operation's confirmation authority rather than inventing a machine-confirmation mechanism.
-
-Done when: documented authenticated scenarios work against a separately available Core service and document Q&A remains usable when that service is unavailable.
+Removed at the user's explicit direction. The RAG system will never access the real application or call its APIs, including read-only requests. The YAML is indexed solely to answer documentation questions. There is no replacement integration phase, application API client, credentials requirement, or operational-action workflow. Current-state/action requests receive a document-only limitation response.
 
 ## 8. Functional acceptance checks
 
@@ -229,11 +226,11 @@ Use the existing seed questions where useful for factual and citation smoke chec
 
 ## 9. Dependencies and immediate next step
 
-`requirements.txt` contains the eight terminal/core dependencies below. FastAPI and Uvicorn have been removed because no RAG HTTP service is required. Streamlit remains an optional later UI dependency and is not installed by the core requirements. `pyproject.toml` registers the terminal entry point and packages the runtime prompt.
+`requirements.txt` is the only requirements file and contains the eight terminal/core dependencies below plus Streamlit for the implemented browser interface. List direct runtime libraries only; pip resolves transitive dependencies automatically. FastAPI and Uvicorn are not direct project requirements because no separate RAG HTTP service is required. `pyproject.toml` reads its runtime dependencies from this file, registers the terminal entry point, and packages the runtime prompt.
 
 | Existing requirement | Purpose in this project | Revised placement |
 | --- | --- | --- |
-| `httpx>=0.28.1,<1.0` | Call local Ollama embedding/chat HTTP endpoints, with reusable connections and explicit timeouts; later reuse for an authorized Core client | Terminal/core runtime |
+| `httpx>=0.28.1,<1.0` | Call local Ollama embedding/chat HTTP endpoints, with reusable connections and explicit timeouts | Terminal/core runtime |
 | `pypdf>=6.0,<7.0` | Extract PDF text page by page while preserving physical page provenance | Ingestion/core runtime |
 | `pdfplumber>=0.11.7,<0.12` | Recover and inspect requirement/state tables when ordinary PDF text extraction is insufficient | Initial ingestion dependency; reassess after extraction quality is measured |
 | `PyYAML>=6.0.2,<7.0` | Load the supplied OpenAPI YAML structurally with safe loading | Ingestion/core runtime |
@@ -241,21 +238,22 @@ Use the existing seed questions where useful for factual and citation smoke chec
 | `rank-bm25>=0.2.2,<0.3` | Complement semantic retrieval with lexical ranking for requirement IDs, paths, and enums; tokenize identifiers deliberately | Terminal/core runtime |
 | `pydantic>=2.11,<3.0` | Validate configuration and future chunk/manifest/answer/citation structures; already used by settings | Terminal/core runtime, independent of FastAPI |
 | `pydantic-settings>=2.10,<3.0` | Load and validate runtime configuration with defaults and overrides; the user's actual configuration file stays private | Terminal/core runtime |
+| `streamlit>=1.55,<2.0` | Provide the implemented terminal-style browser interface | Included in the single runtime requirements file; browser usage is optional |
 
-Use direct HTTPX calls rather than adding a duplicate Ollama SDK, LangChain, LlamaIndex, cloud SDKs, or a separate PyTorch/CUDA environment. For the optional browser phase, declare Streamlit separately, for example as a `ui` extra, choosing a supported version after compatibility checks. Its own runtime serves the Streamlit app; an additional Uvicorn process is not required. The initial terminal input/command parser can use Python's standard library. Add Rich or prompt-toolkit only if specific terminal usability requirements justify another dependency. Development tools remain separate in the existing `pyproject.toml` dev extra; do not assume the currently absent `requirements-dev.txt` exists.
+Use direct HTTPX calls rather than adding a duplicate Ollama SDK, LangChain, LlamaIndex, cloud SDKs, or a separate PyTorch/CUDA environment. Streamlit is included in `requirements.txt` (`streamlit>=1.55,<2.0`; checked version 1.66.1). Its own runtime serves the app; no separate RAG API or Uvicorn application is defined. Current Streamlit depends transitively on Uvicorn and Starlette; pip installs these automatically rather than listing them as direct requirements. The terminal input/command parser uses Python's standard library. Development tools remain separate in the existing `pyproject.toml` dev extra; the absent `requirements-dev.txt` is not required.
 
 Version policy:
 
 - The existing lower bounds are provisional scaffold baselines, not demonstrated minimum supported versions. Do not claim that the pipeline depends on a particular patch release until a used feature or bug fix establishes that need.
 - Upper bounds were intended to avoid unreviewed API changes. Most current ranges allow an entire major release series; they are not exact pins. The `<0.12` limit for pdfplumber and `<0.3` limit for rank-bm25 are more conservative minor-series limits. Review them against actual package compatibility rather than preserving them automatically. Pre-1.0 package behavior cannot be inferred from the number alone.
-- At implementation time, resolve supported versions on Python 3.11/Windows, run the meaningful ingestion/retrieval/model integration checks, document any necessary bounds, and capture exact direct and transitive versions in a reproducible lock or constraints snapshot. Broad ranges alone do not produce repeatable installs; a successful resolution alone does not establish runtime correctness.
+- Keep accepted version ranges in the single `requirements.txt`; do not add exact-version lock files or list transitive dependencies. Other platforms/Python versions require their own validation. Accepted ranges allow installations to resolve different compatible versions; a successful resolution alone does not establish runtime correctness.
 - Review dependency upgrades deliberately, including bug/security fixes, and rerun relevant checks. Do not freeze outdated versions indefinitely or loosen bounds without verification.
 
 References: [HTTPX](https://www.python-httpx.org/), [pypdf text extraction](https://pypdf.readthedocs.io/en/stable/user/extract-text.html), [pdfplumber](https://github.com/jsvine/pdfplumber), [PyYAML](https://pyyaml.org/wiki/PyYAMLDocumentation), [Qdrant client](https://github.com/qdrant/qdrant-client), [BM25 implementation](https://github.com/dorianbrown/rank_bm25), [Pydantic validation](https://docs.pydantic.dev/latest/), [Pydantic settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/), [FastAPI server deployment](https://fastapi.tiangolo.com/deployment/manually/), [Python package versioning](https://packaging.python.org/en/latest/discussions/versioning/), and [pip repeatable installs](https://pip.pypa.io/en/stable/topics/repeatable-installs/).
 
 Configuration fields now drive inference, indexing, and retrieval. The environment checker verifies setup and installed model presence only; it still does not itself prove chat or embeddings succeed. The terminal commands and separate live smoke checks exercise the implemented adapters.
 
-Next: use the phases 1-3 terminal workflow and complete any additional phase 4 operational acceptance/recovery checks before optional UI work. Model choice remains under the user's control through their configuration, with compatible re-ingestion when an embedding model changes. Streamlit is optional phase 5 work; live operational tools are optional phase 6 work. No local RAG HTTP API, standalone frontend, model-comparison phase, or comparison-metrics report is required. Keep Qdrant local until functional or concurrency needs justify a change.
+Use terminal chat as the primary workflow; launch the optional Streamlit view when useful. Model choice remains under the user's control, with compatible re-ingestion only when embeddings/source/chunk settings change. Phase 6 is removed: no application API access is permitted. No standalone frontend, separate RAG HTTP API, model-comparison phase, or comparison-metrics report is required. Keep Qdrant local until functional or concurrency needs justify a change.
 
 ## 10. Scaffold verification performed
 
@@ -275,4 +273,16 @@ These are historical checks against the original scaffold dependency set. They a
 - Ruff checks and `pip check` passed. The installed `freezer-rag` help command is available.
 - Ingested exactly the three allowlisted sources into a 720-chunk Nomic snapshot. Checked source hashes against the manifest; original source contents are unchanged. Earlier snapshots remain available for recovery.
 - Exercised local Nomic embeddings and `qwen3.5:4b` generation with explicit defaults and `--no-env`. Verified cited RESERVED/OCCUPIED and two-day/48-hour reservation-duration answers, live-inventory abstention, terminal help, clear, and exit. Follow-up retrieval/history and duration-excerpt regressions have focused checks. All 12 focused test cases passed.
-- The coding assistant did not read or modify the user's `.env`. Qwen embedding model comparison, optional Streamlit, live Core operations, and the broader phase 4 acceptance/recovery exercise remain outside this implementation.
+- The coding assistant did not read or modify the user's `.env`. These checks originally covered phases 1-3; phases 4-5 verification is recorded below. Model comparisons remain the user's own activity, and live Core operations are permanently outside scope.
+
+## 12. Phases 4-5 verification and usage
+
+- `RAG_LLM_MODEL` is exposed in `.env.example` and drives generation independently of embeddings; missing or embedding-only answer models fail clearly. Model changes leave index compatibility unchanged.
+- Clean Windows x64/Python 3.13 installation, focused core tests, and model/index readiness were checked before optional UI work. The current setup uses one requirements file for the nine direct runtime libraries, including Streamlit.
+- Snapshot recovery tests cover a damaged active pointer, compatible restoration, and refusal of an incompatible snapshot without changing the active pointer. Stop all store users before backing up the complete index/manifests directories and the three original sources; see README for restoration steps.
+- Added meaningful timeout, truncated-output, cancellation/EOF, and UI rerun/session-isolation checks rather than tests for individual settings/widgets. Dotenv reads remain prohibited in every test. UI checks are skipped when the optional dependency is absent.
+- The native Streamlit view reuses the same RAG service, serializes retrieval/generation with one shared index, keeps session state separate, and exposes answer-model, temperature, top-k, and context controls without writing files. Use `python -m freezer_rag --no-env ui` for validation without loading private configuration.
+- No application API client, URL/token settings, authentication adapter, or live operations were implemented. OpenAPI operations remain searchable document evidence only.
+- All 17 focused test cases passed in the clean environment, with `pip check` and Ruff checks passing. After synchronizing conversation reset with inference, the six affected conversation/UI checks passed again. The extra dependency lock files were subsequently removed at the user's request; dependencies are maintained only in `requirements.txt`.
+- Live checks used only local Ollama with `--no-env`: readiness reported the 720-chunk Nomic index, a terminal answer cited the 48-hour reservation deadline, and Streamlit answered the project-creation method/path with a YAML citation. The live UI preserved completed results across reruns and cleared history correctly. A headless Chrome review verified the fully loaded dark monospaced layout and loopback-only launcher; validation processes were stopped afterward.
+- No private `.env` was read, edited, copied, or loaded during validation. The three source documents were preserved. Validation used Python 3.13; other declared Python versions have not received equivalent runtime checks here.

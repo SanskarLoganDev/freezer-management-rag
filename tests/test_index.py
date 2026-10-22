@@ -65,6 +65,8 @@ def index(tmp_path, monkeypatch):
 def test_atomic_rebuild_persistence_no_duplicate_growth_and_stale_index_rejection(index):
     store, embeddings, units = index
     first = store.build(progress=lambda text: None)
+    store.settings.llm_model = "another-chat-model:4b"
+    assert store.read_manifest() == first
     calls = embeddings.calls
     assert store.build(progress=lambda text: None) == first
     assert embeddings.calls == calls
@@ -97,3 +99,18 @@ def test_hybrid_retrieval_promotes_exact_identifier_and_store_rejects_second_own
         with pytest.raises(RagError, match="already in use"):
             with store_owner(store.settings.qdrant_path):
                 pass
+
+
+def test_restore_recovers_a_damaged_pointer_and_refuses_incompatible_snapshot(index):
+    store, embeddings, _ = index
+    original = store.build(progress=lambda text: None)
+    store.build(rebuild=True, progress=lambda text: None)
+    assert len(store.snapshots()) == 2
+    store.pointer.write_text('{"broken":true}', encoding="utf-8")
+    assert store.restore(original["snapshot"]) == original
+    assert store.read_manifest() == original
+    before = store.pointer.read_bytes()
+    embeddings.digest = "changed-digest"
+    with pytest.raises(RagError, match="incompatible"):
+        store.restore(original["snapshot"])
+    assert store.pointer.read_bytes() == before

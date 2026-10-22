@@ -1,0 +1,20 @@
+[server]
+address = "127.0.0.1"
+headless = true
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = "none"
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#7EE2A8"
+backgroundColor = "#0C1110"
+secondaryBackgroundColor = "#151E1A"
+textColor = "#E2EDE6"
+font = "monospace"
+headingFont = "monospace"

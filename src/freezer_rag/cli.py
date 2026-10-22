@@ -80,6 +80,13 @@ def parser() -> argparse.ArgumentParser:
         "--rebuild", action="store_true", help="Force a fresh atomic index snapshot"
     )
     commands.add_parser("chat", help="Start an interactive terminal conversation")
+    commands.add_parser("ui", help="Start the optional Streamlit document chat")
+    commands.add_parser("doctor", help="Check model and index readiness without generating")
+    commands.add_parser(
+        "snapshots", help="List retained snapshots for the selected embedding model"
+    )
+    restore = commands.add_parser("restore", help="Activate a retained compatible index snapshot")
+    restore.add_argument("snapshot")
     for command in ("ask", "search"):
         child = commands.add_parser(
             command, help="Answer once" if command == "ask" else "Inspect retrieval"
@@ -90,6 +97,33 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "ui":
+        import importlib.util
+        import subprocess
+        from pathlib import Path
+
+        if importlib.util.find_spec("streamlit") is None:
+            print(
+                "Install dependencies: python -m pip install -r requirements.txt", file=sys.stderr
+            )
+            return 1
+        try:
+            return subprocess.call(
+                [
+                    sys.executable,
+                    "-m",
+                    "streamlit",
+                    "run",
+                    str(Path(__file__).with_name("ui_app.py")),
+                    "--server.address=127.0.0.1",
+                    "--server.headless=true",
+                    "--browser.gatherUsageStats=false",
+                    "--",
+                    *(sys.argv[1:] if argv is None else argv),
+                ]
+            )
+        except KeyboardInterrupt:
+            return 130
     overrides = {
         key: value
         for key, value in vars(args).items()
@@ -114,8 +148,27 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "ingest":
                 store.build(args.rebuild, progress=lambda message: print(message, file=sys.stderr))
                 ollama.unload_embeddings()
+            elif args.command == "snapshots":
+                for manifest in store.snapshots():
+                    print(
+                        f"{manifest['snapshot']}  {manifest['created_at']}  "
+                        f"{manifest['chunk_count']} chunks"
+                    )
+            elif args.command == "restore":
+                manifest = store.restore(args.snapshot)
+                print(f"Restored {manifest['snapshot']} ({manifest['chunk_count']} chunks)")
             else:
+                if args.command in ("chat", "ask", "doctor"):
+                    ollama.check_chat_model()
                 store.open()
+                if args.command == "doctor":
+                    print(f"Ready: base model {settings.llm_model}")
+                    print(
+                        f"Ready: embeddings {settings.embedding_model}, "
+                        f"{settings.embedding_dimensions} dimensions"
+                    )
+                    print(f"Ready: {len(store.chunks)} chunks; {settings.qdrant_collection}")
+                    return 0
                 session = ChatSession(store)
                 if args.command == "chat":
                     ollama.model(settings.llm_model)

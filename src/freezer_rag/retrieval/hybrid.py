@@ -4,6 +4,7 @@ import re
 
 from rank_bm25 import BM25Okapi
 
+from freezer_rag.config import Settings
 from freezer_rag.ingestion.chunking import normalize
 from freezer_rag.models import Chunk
 from freezer_rag.vectorstore.store import IndexStore
@@ -78,8 +79,8 @@ class Retriever:
         self.ids = list(self.chunks)
         self.bm25 = BM25Okapi([tokenize(chunk.normalized_text) for chunk in store.chunks])
 
-    def search(self, question: str) -> list[Chunk]:
-        settings = self.store.settings
+    def search(self, question: str, settings: Settings | None = None) -> list[Chunk]:
+        settings = settings or self.store.settings
         vector = self.store.embeddings.embed([question], query=True)[0]
         dense = self.store.dense(vector, settings.dense_top_k)
         terms = tokenize(question)

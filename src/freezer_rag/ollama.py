@@ -74,9 +74,19 @@ class Ollama:
             self._info[name] = self.request("POST", "/api/show", {"model": name})
         return self._info[name]
 
+    def check_chat_model(self) -> dict:
+        info = self.show(self.settings.llm_model)
+        capabilities = info.get("capabilities", [])
+        if capabilities and "completion" not in capabilities:
+            raise RagError(
+                f"{self.settings.llm_model} cannot generate chat answers. "
+                "Set RAG_LLM_MODEL to an installed chat model."
+            )
+        return info
+
     def chat(self, messages: list[dict], schema: dict) -> str:
         settings = self.settings
-        info = self.show(settings.llm_model)
+        info = self.check_chat_model()
         payload = {
             "model": settings.llm_model,
             "messages": messages,

@@ -2,7 +2,7 @@
 
 import json
 import os
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -31,7 +31,7 @@ def store_owner(root: Path):
     import sqlite3
 
     root.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(root / "ownership.sqlite", timeout=0)
+    connection = sqlite3.connect(root / "ownership.sqlite", timeout=0, check_same_thread=False)
     try:
         try:
             connection.execute("BEGIN EXCLUSIVE")
@@ -169,7 +169,7 @@ class IndexStore:
         progress(f"Ready: {len(chunks)} chunks in {collection}")
         return manifest
 
-    def open(self) -> None:
+    def open(self, *, shared: bool = False) -> None:
         manifest = self.read_manifest()
         directory = self.settings.qdrant_path / "snapshots" / manifest["snapshot"]
         try:
@@ -181,7 +181,9 @@ class IndexStore:
                 raise RagError("Index corpus is incomplete. Run ingest --rebuild.")
             if not (directory / "qdrant").is_dir():
                 raise RagError("Vector index is missing. Run ingest --rebuild.")
-            self.client = QdrantClient(path=str(directory / "qdrant"))
+            self.client = QdrantClient(
+                path=str(directory / "qdrant"), force_disable_check_same_thread=shared
+            )
             if self.client.count(self.settings.qdrant_collection, exact=True).count != len(
                 self.chunks
             ):
@@ -194,6 +196,43 @@ class IndexStore:
         if self.client is not None:
             self.client.close()
             self.client = None
+
+    def snapshots(self) -> list[dict]:
+        snapshots = []
+        root = self.settings.qdrant_path / "snapshots"
+        for path in sorted(root.glob("*/manifest.json")):
+            try:
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+                if manifest["signature"]["collection"] == self.settings.qdrant_collection:
+                    snapshots.append(manifest)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return snapshots
+
+    def restore(self, snapshot: str) -> dict:
+        """Activate an existing compatible, complete snapshot without modifying its files."""
+        if len(snapshot) != 32 or any(char not in "0123456789abcdef" for char in snapshot):
+            raise RagError("Invalid snapshot ID; choose one from the snapshots command")
+        directory = self.settings.qdrant_path / "snapshots" / snapshot
+        try:
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+            if manifest["snapshot"] != snapshot or manifest["signature"] != self.signature():
+                raise RagError("Snapshot is incompatible with current sources/model/chunking")
+            chunks = [
+                Chunk.model_validate(value)
+                for value in json.loads((directory / "chunks.json").read_text(encoding="utf-8"))
+            ]
+            if len(chunks) != manifest["chunk_count"] or not (directory / "qdrant").is_dir():
+                raise RagError("Snapshot is incomplete; active index was not changed")
+            with closing(QdrantClient(path=str(directory / "qdrant"))) as candidate:
+                if candidate.count(self.settings.qdrant_collection, exact=True).count != len(
+                    chunks
+                ):
+                    raise RagError("Snapshot vectors are incomplete; active index was not changed")
+            write_json(self.pointer, manifest)
+            return manifest
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RagError("Cannot restore this snapshot; active index was not changed") from exc
 
     def dense(self, vector: list[float], limit: int) -> list[str]:
         if self.client is None:

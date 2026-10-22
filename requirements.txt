@@ -1,6 +1,4 @@
-# Python 3.11+; local-first RAG implementation dependencies.
-# Version bounds are provisional; validate and lock resolved versions during setup.
-# Core dependencies for ingestion, retrieval, and terminal chat.
+# Python 3.11+; direct runtime dependencies for document RAG, terminal chat, and Streamlit.
 
 # Ollama REST transport; no cloud API or separate PyTorch installation required.
 httpx>=0.28.1,<1.0
@@ -18,4 +16,5 @@ rank-bm25>=0.2.2,<0.3
 pydantic>=2.11,<3.0
 pydantic-settings>=2.10,<3.0
 
-# Streamlit is an optional later UI dependency, separate from terminal/core setup.
+# Terminal-style browser interface; terminal chat remains the primary interface.
+streamlit>=1.55,<2.0

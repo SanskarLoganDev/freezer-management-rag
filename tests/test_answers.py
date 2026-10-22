@@ -102,7 +102,7 @@ def test_terminal_loop_recovers_from_request_failure_and_handles_sources_reset_e
 def test_followup_retrieval_keeps_new_subject_and_bounds_then_clears_history(monkeypatch):
     queries = []
 
-    def search(query):
+    def search(query, settings=None):
         queries.append(query)
         return [evidence()]
 
@@ -126,3 +126,22 @@ def test_followup_retrieval_keeps_new_subject_and_bounds_then_clears_history(mon
     assert followup in queries[-1]
     session.clear()
     assert session.history == [] and session.last_answer is None
+
+
+def test_terminal_cancellation_keeps_session_usable_and_eof_exits(monkeypatch, capsys):
+    commands = iter(["cancel this", "next question"])
+
+    def read(prompt):
+        try:
+            return next(commands)
+        except StopIteration:
+            raise EOFError from None
+
+    def ask(question):
+        if question == "cancel this":
+            raise KeyboardInterrupt
+        return Answer(text="Recovered")
+
+    monkeypatch.setattr("builtins.input", read)
+    terminal_chat(SimpleNamespace(ask=ask))
+    assert "assistant> Recovered" in capsys.readouterr().out
