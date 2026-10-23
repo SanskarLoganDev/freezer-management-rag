@@ -2,18 +2,17 @@
 
 import json
 import re
-import unicodedata
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from freezer_rag.config import Settings
-from freezer_rag.guardrails import has_override
 from freezer_rag.models import Answer, Chunk, GeneratedAnswer, RagError
 from freezer_rag.ollama import Ollama
 from freezer_rag.retrieval.hybrid import DURATION_QUERY, DURATION_VALUE
 
 PROMPT_PATH = Path(__file__).with_name("system_prompt.txt")
+CITATION = re.compile(r"\[S(\d+)\]")
 
 
 def excerpt(text: str, question: str, byte_limit: int) -> str:
@@ -22,12 +21,7 @@ def excerpt(text: str, question: str, byte_limit: int) -> str:
         return text
     stop = {"the", "is", "a", "an", "of", "to", "in", "and", "what", "which", "how", "does"}
     terms = set(re.findall(r"[a-z0-9_/-]+", question.lower())) - stop
-    # Keep a complete table row together, including its qualifications after a
-    # period. Splitting '. | Yes' into a separate fragment obscures state meaning.
-    lines = []
-    for line in text.splitlines():
-        parts = [line] if "|" in line else re.split(r"(?<=[.!?])\s+", line)
-        lines.extend(part for part in parts if part.strip())
+    lines = [line for line in re.split(r"\n+|(?<=[.!?])\s+", text) if line.strip()]
     ranked = sorted(
         range(len(lines)),
         key=lambda index: (
@@ -63,28 +57,31 @@ def prompt_cost(messages: list[dict], schema: dict) -> int:
 
 
 def build_messages(
-    settings: Settings,
-    question: str,
-    chunks: list[Chunk],
-    history: list[tuple[str, str]],
-    *,
-    required_sources: tuple[str, ...] = (),
+    settings: Settings, question: str, chunks: list[Chunk], history: list[tuple[str, str]]
 ) -> tuple[list[dict], dict[str, Chunk]]:
     schema = GeneratedAnswer.model_json_schema()
     system = PROMPT_PATH.read_text(encoding="utf-8")
-    # Reserve space for schema enums, the single repair instruction, and framing.
-    budget = settings.llm_num_ctx - min(128, settings.llm_num_predict) - 512
+    budget = settings.llm_num_ctx - settings.llm_num_predict
     messages = [{"role": "system", "content": system}]
-    final = {
-        "role": "user",
-        "content": json.dumps(
-            {"question": question, "required_sources": required_sources, "evidence": []}
-        ),
-    }
+    final = {"role": "user", "content": json.dumps({"question": question, "evidence": []})}
     if prompt_cost([*messages, final], schema) > budget:
         raise RagError("Question/instructions exceed the context budget. Shorten the question.")
-    # Follow-ups have already been resolved by the planner. Previously generated
-    # answers never enter the evidence selector or take space away from sources.
+    # Bound history relative to remaining space, not the total prompt size; otherwise
+    # fixed system/schema overhead can accidentally exclude every prior turn.
+    base_cost = prompt_cost([*messages, final], schema)
+    history_budget = min(800, (budget - base_cost) // 3)
+    retained: list[dict] = []
+    if settings.max_history_turns:
+        for user, assistant in reversed(history[-settings.max_history_turns :]):
+            turn = [
+                {"role": "user", "content": user[:160]},
+                {"role": "assistant", "content": assistant[:160]},
+            ]
+            cost = prompt_cost([*messages, *turn, *retained, final], schema)
+            if cost - base_cost > history_budget:
+                break
+            retained = turn + retained
+    messages.extend(retained)
     evidence = []
     sources = {}
     used_chars = 0
@@ -93,7 +90,7 @@ def build_messages(
         current = {
             "role": "user",
             "content": json.dumps(
-                {"question": question, "required_sources": required_sources, "evidence": evidence},
+                {"question": question, "evidence": evidence},
                 ensure_ascii=False,
             ),
         }
@@ -103,14 +100,12 @@ def build_messages(
         if allowance < 100:
             continue
         text = excerpt(chunk.text, question, allowance)
-        if has_override(text):
-            continue
         content = {"id": label, "source": chunk.source, "text": text}
         candidate = evidence + [content]
         final = {
             "role": "user",
             "content": json.dumps(
-                {"question": question, "required_sources": required_sources, "evidence": candidate},
+                {"question": question, "evidence": candidate},
                 ensure_ascii=False,
             ),
         }
@@ -124,111 +119,59 @@ def build_messages(
     final = {
         "role": "user",
         "content": json.dumps(
-            {"question": question, "required_sources": required_sources, "evidence": evidence},
+            {"question": question, "evidence": evidence},
             ensure_ascii=False,
         ),
     }
     return [*messages, final], sources
 
 
-def validate_answer(
-    content: str, sources: dict[str, Chunk], *, required_sources: tuple[str, ...] = ()
-) -> Answer:
+def validate_answer(content: str, sources: dict[str, Chunk]) -> Answer:
     try:
         generated = GeneratedAnswer.model_validate_json(content)
     except ValidationError as exc:
         raise RagError(
             "Model returned an invalid answer structure; no answer was accepted. Retry."
         ) from exc
-    if not generated.evidence_sufficient:
-        return Answer(
-            text="I could not find enough supporting text in the retrieved documents. "
-            "Try a more specific document question."
-        )
-    ids = set(generated.source_ids)
-    if not ids.issubset(sources):
+    ids = set(generated.citation_ids)
+    inline = {f"S{number}" for number in CITATION.findall(generated.answer)}
+    if not ids.issubset(sources) or (inline and inline != ids):
         raise RagError(
             "Model returned unknown or inconsistent citations; no answer was accepted. Retry."
         )
-    if not ids:
+    if generated.evidence_sufficient and not ids:
         raise RagError(
             "Model claimed sufficient evidence without citations; no answer was accepted."
         )
-    selected = {key: chunk for key, chunk in sources.items() if key in ids}
-    if not set(required_sources).issubset({chunk.source for chunk in selected.values()}):
-        raise RagError("The selected evidence does not cover all requested documents.")
-    # The model selects IDs, never user-visible prose. Valid IDs therefore cannot
-    # launder unrelated algorithms or invented facts into accepted output.
-    paragraphs = []
-    for label, chunk in selected.items():
-        if has_override(chunk.text):
-            raise RagError("Selected source contains instructions that cannot be used as evidence.")
-        text = "".join(
-            char
-            for char in chunk.text
-            if char in "\n\t" or not unicodedata.category(char).startswith("C")
+    if not generated.evidence_sufficient:
+        # Do not display model-written unsupported claims in an abstention.
+        return Answer(
+            text="The indexed documents do not provide enough evidence to answer that. "
+            "This assistant only explains the supplied documents; it cannot inspect "
+            "current inventory, locations, or availability, or perform actions."
         )
-        paragraphs.append(f"{text.strip()} [{label}]")
+    # Citation IDs are the structured contract. Render valid response-level
+    # citations ourselves if a model omits inline markers; never accept invented IDs.
+    text = generated.answer
+    if not inline:
+        text += " " + " ".join(f"[{label}]" for label in sources if label in ids)
     return Answer(
-        text="From the supplied documents:\n\n" + "\n\n".join(paragraphs),
-        sources=selected,
+        text=text,
+        sources={key: value for key, value in sources.items() if key in ids},
         evidence_sufficient=True,
     )
 
 
 def generate(
-    ollama: Ollama,
-    question: str,
-    chunks: list[Chunk],
-    history: list[tuple[str, str]],
-    *,
-    required_sources: tuple[str, ...] = (),
+    ollama: Ollama, question: str, chunks: list[Chunk], history: list[tuple[str, str]]
 ) -> Answer:
-    if len(required_sources) > 1:
-        # One complete top-ranked excerpt per requested document prevents several
-        # near-duplicate PDF table fragments crowding out the other contract.
-        chunks = [
-            next(chunk for chunk in chunks if chunk.source == source)
-            for source in required_sources
-            if any(chunk.source == source for chunk in chunks)
-        ]
-    messages, sources = build_messages(
-        ollama.settings, question, chunks, history, required_sources=required_sources
-    )
+    messages, sources = build_messages(ollama.settings, question, chunks, history)
     if not sources:
         return Answer(
             text="No usable evidence fits the prompt. Try a more specific question or "
             "increase the context budget."
         )
     schema = GeneratedAnswer.model_json_schema()
-    if not set(required_sources).issubset({chunk.source for chunk in sources.values()}):
-        return Answer(
-            text="The retrieved excerpts do not cover all requested documents. "
-            "Try naming the endpoint or section, or increase the evidence budget."
-        )
-    schema["properties"]["source_ids"]["items"]["enum"] = list(sources)
-    if len(required_sources) > 1:
-        messages[0]["content"] += "\nFor this comparison select all of " + ", ".join(sources) + "."
-    for attempt in range(2):
-        content = ollama.chat(messages, schema, num_predict=128)
-        try:
-            answer = validate_answer(content, sources, required_sources=required_sources)
-            if answer.evidence_sufficient or attempt:
-                return answer
-        except RagError:
-            if attempt:
-                return Answer(
-                    text="I could not produce a source-verified answer. "
-                    "Please rephrase the document question."
-                )
-        # One bounded repair uses the same model and original evidence, without
-        # replaying a rejected draft or its potentially injected text.
-        messages[0] = {
-            "role": "system",
-            "content": messages[0]["content"]
-            + "\nSelect valid IDs, cover required sources, and correct false premises. "
-            "Use false only when no supplied excerpt answers the question. "
-            + "Available sources: "
-            + "; ".join(f"{label}={chunk.source}" for label, chunk in sources.items()),
-        }
-    raise AssertionError("Unreachable selection retry state")
+    schema["properties"]["citation_ids"]["items"]["enum"] = list(sources)
+    content = ollama.chat(messages, schema)
+    return validate_answer(content, sources)

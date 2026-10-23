@@ -4,7 +4,7 @@ import pytest
 
 from freezer_rag.config import Settings
 from freezer_rag.ingestion.corpus import SOURCES
-from freezer_rag.models import Chunk, RagError, SourceUnit
+from freezer_rag.models import RagError, SourceUnit
 from freezer_rag.retrieval.hybrid import Retriever
 from freezer_rag.vectorstore.store import IndexStore, store_owner
 
@@ -114,40 +114,3 @@ def test_restore_recovers_a_damaged_pointer_and_refuses_incompatible_snapshot(in
     with pytest.raises(RagError, match="incompatible"):
         store.restore(original["snapshot"])
     assert store.pointer.read_bytes() == before
-
-
-def test_comparison_retrieval_keeps_both_documents_even_when_their_passages_match():
-    texts = [
-        ("Software_Design_Document.pdf", "POST /api/v1/conversations Agent conversation endpoint."),
-        ("openapi.yaml", "POST /api/v1/conversations Agent conversation endpoint."),
-        ("business_requirements.pdf", "Freezer temperature and storage capacity."),
-        ("business_requirements.pdf", "Project membership and laboratory permissions."),
-        ("business_requirements.pdf", "Materials and samples require appropriate handling."),
-        (
-            "openapi.yaml",
-            "GET /api/v1/conversations/{conversation_id} Individual conversation details.",
-        ),
-    ]
-    chunks = [
-        Chunk(
-            id=str(index),
-            source=source,
-            source_hash="test",
-            title="Test",
-            locator="test",
-            text=text,
-            normalized_text=text,
-        )
-        for index, (source, text) in enumerate(texts)
-    ]
-    settings = Settings(_env_file=None, final_top_k=2, lexical_top_k=1, dense_top_k=1)
-    store = SimpleNamespace(
-        chunks=chunks,
-        settings=settings,
-        embeddings=SimpleNamespace(embed=lambda *args, **kwargs: [[1.0]]),
-        dense=lambda *args: ["2"],
-    )
-    required = ("Software_Design_Document.pdf", "openapi.yaml")
-    found = Retriever(store).search("Agent conversations endpoint", required_sources=required)
-    assert {chunk.source for chunk in found} == set(required)
-    assert {chunk.id for chunk in found} == {"0", "1"}

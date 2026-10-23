@@ -1,7 +1,5 @@
 """Small shared contracts; evidence and model output remain separate."""
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -29,18 +27,9 @@ class Chunk(SourceUnit):
 class GeneratedAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    answer: str = Field(min_length=1)
+    citation_ids: list[str]
     evidence_sufficient: bool
-    source_ids: list[str] = Field(max_length=4)
-
-
-class RequestPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    intent: Literal["document", "mixed", "out_of_scope", "live", "action", "override"]
-    query: str = Field(max_length=2000)
-    sources: list[
-        Literal["business_requirements.pdf", "Software_Design_Document.pdf", "openapi.yaml"]
-    ] = Field(max_length=3)
 
 
 class Answer(BaseModel):

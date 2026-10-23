@@ -4,9 +4,9 @@ The suite covers the meaningful boundaries of the document RAG implementation:
 
 - Ingestion: PDF page provenance, table/requirement boundaries, oversized operation splitting, safe local YAML references, and malformed-source handling.
 - Indexing: stable chunk IDs, repeat-ingestion idempotency, replacement/persistence, refusal to query incompatible manifests, and restoration from retained compatible snapshots.
-- Retrieval: exact endpoint and requirement-ID lookup, paraphrases, context budgets, and preservation of both requested sources even when their passages match.
-- Generation: excerpt-only output, rejection of model-written prose even with valid IDs, source coverage, insufficient evidence, instruction-bearing evidence, and bounded repair without replaying rejected drafts.
-- Guardrails: scope decisions, override/citation-fabrication requests, refusal before retrieval, and exclusion of refusals/unverified answers from conversation history.
+- Retrieval: exact endpoint and requirement-ID lookup, paraphrases, and context budgets.
+- Generation: natural-answer preservation, citation validation, insufficient evidence, instruction-bearing evidence, and bounded prompts.
+- Guardrails: recognizable override/citation-fabrication and unrelated coding requests blocked before retrieval, ordinary documentation questions allowed, and exclusion of refusals/unverified answers from conversation history.
 - Integration: mocked Ollama responses, timeouts, truncated generation, missing models, base-model overrides, and dimension mismatch; separate live local smoke checks.
 - Terminal: command handling, recoverable failures, cancellation, EOF, source display, and context reset.
 - Optional Streamlit: one focused scenario covers reruns without duplicate generation, recovery, private conversations, clearing, and answer-model changes without reopening the index. Skipped if Streamlit is absent.

@@ -55,7 +55,7 @@ Start Ollama, then run from the project root:
 .\.venv\Scripts\python.exe -m freezer_rag chat
 ```
 
-The chat stays open across questions and prints source excerpts with PDF page or API operation citations. Commands: `/help`, `/sources`, `/clear`, `/exit`. Ctrl+C cancels the current request; end-of-input exits. Only accepted, in-scope questions and answers enter conversation history; refusals and failed validation do not. History stays in memory and `/clear` removes it. No transcripts are saved automatically.
+The chat stays open across questions and prints concise answers with PDF page or API operation citations. `/sources` displays the supporting excerpts. Commands: `/help`, `/sources`, `/clear`, `/exit`. Ctrl+C cancels the current request; end-of-input exits. Only answers accepted as evidence-sufficient enter conversation history; refusals and failed validation do not. History stays in memory and `/clear` removes it. No transcripts are saved automatically.
 
 For a single answer or to inspect the retrieved passages:
 
@@ -109,11 +109,11 @@ Original documents stay in `docs/`. Extracted units, chunks, the BM25 corpus, an
 
 The Qdrant database is inside each snapshot's `qdrant/` directory. Query it through the application or Qdrant client; its internal SQLite files are not a public SQL query interface. BM25 is reconstructed from the same saved chunk corpus when the index opens.
 
-The configured answer model first classifies the request and forms a document query. Mixed document/programming requests, unrelated questions, live-state requests, and action requests receive distinct explanations before retrieval. Obvious instruction overrides, private-file requests, and citation fabrication are blocked by application checks before inference. False-premise questions remain documentation questions so the system can retrieve the correcting evidence. Explicitly requested documents are determined from the user's wording; comparison retrieval attempts to keep evidence from each one and rejects incomplete coverage.
+Simple application checks block recognizable instruction overrides, private-configuration requests, citation fabrication, and unrelated programming exercises before retrieval. Other questions use the earlier hybrid retrieval flow directly, without a model-based scope planner or query rewrite. Short follow-ups can use the previous accepted question for context. These checks are deliberately limited and do not catch every phrasing.
 
-The answer step uses the same model to select source IDs, not generate user-visible prose. The application renders the corresponding retrieved excerpts itself. Model-written code or claims cannot pass merely by carrying valid citation IDs, and document comparisons require coverage of every requested source. Invalid selections receive at most one repair attempt using the original evidence; rejected drafts are not replayed into the retry or saved in history. No second model, external guard service, or new dependency is involved. Normal document answers use a scope call plus an evidence-selection call, so they may take longer than the previous single-call flow.
+The configured answer model writes a concise answer using the retrieved evidence and returns structured citation IDs and an evidence-sufficiency flag. Unknown, missing, or inconsistent citations are rejected. Insufficient evidence produces a document-only limitation response. Only accepted answers enter bounded conversation history. Normal questions use one generation call, plus query embedding; no reviewer model or automatic answer-repair call is involved. Valid citation IDs do not prove that every claim is supported.
 
-Prompt space is conservatively estimated from UTF-8 bytes with output/repair reserves; this can select less evidence than the character cap allows. Source excerpts retain their wording, though line selection and formatting can shorten them. These controls prevent invented answer prose from reaching the user; they do not guarantee that the model selected every relevant passage or interpreted the question correctly. Inspect the sources for important answers. Tables are extracted as rows; image-only diagrams are not interpreted, and pages without text emit a warning. Existing indexes remain compatible; restart the chat/UI to use these guardrails without re-ingestion.
+Prompt space is conservatively estimated from UTF-8 bytes with an output reserve; this can select less evidence than the character cap allows. Source excerpts retain their wording, though line selection and formatting can shorten them. The model can still misinterpret evidence, invent a claim, or refuse an answerable question. Inspect sources for important answers. Tables are extracted as rows; image-only diagrams are not interpreted, and pages without text emit a warning. Existing indexes remain compatible; restart the chat/UI after the update without re-ingestion.
 
 ## Recorded failures and accepted limitations
 
@@ -121,15 +121,15 @@ The following observations come from the user's terminal session and local check
 
 | Case | Observed failure | Final behavior / accepted limitation |
 | --- | --- | --- |
-| Mixed freezer question and Two Sum request | The earlier implementation generated unrelated Python and attached valid freezer-document citations. | The tested mixed request is now declined before retrieval. The model still classifies scope, so other wordings may be misclassified. Final answers are rendered from source excerpts rather than model-written code/prose. |
+| Mixed freezer question and Two Sum request | The earlier implementation generated unrelated Python and attached valid freezer-document citations. | Focused tests verify that the reported mixed request is declined before retrieval. Other wordings can bypass the simple checks; citation validation alone cannot prevent unrelated content. |
 | False premise about RESERVED or a 15-minute reservation | The earlier implementation refused instead of finding the correcting evidence. | Local checks returned the RESERVED/check-in definition and two-day/48-hour reservation evidence. False-premise handling can still vary with wording and retrieved context. |
-| Architecture PDF versus YAML conversation URLs | Earlier attempts refused the question or selected different operations, such as a collection endpoint and an individual-conversation endpoint. | **Still a known failure:** the final focused live check returned “The retrieved excerpts do not cover all requested documents” for this valid comparison question. The system refuses incomplete coverage rather than presenting it as a verified comparison. |
-| Invented citation instruction | Earlier attempts raised an unknown/inconsistent-citation error or a generic refusal. | Obvious citation-fabrication instructions are now declined directly. Invalid model selections receive one repair attempt, then a failure/insufficient-evidence response. |
-| Unrelated questions, current locations, and requested actions | The earlier implementation reused an irrelevant freezer-inventory refusal for several different situations. | Tested weather, live-location, action, and override requests now receive specific limitations. Classification is probabilistic, and answerable questions may still be refused. |
-| Answer presentation | Extraction and excerpt selection can expose repeated headings, wrapped table rows, JSON fragments, or extra tangential passages. | Accepted for this local prototype. Excerpt-only answers favor inspectable source wording over fluent summaries; they do not guarantee a complete explanation. |
-| Latency and consistency | Model loading, laptop memory limits, scope planning, and evidence selection add delay. | Normal document requests use two calls to the same chat model, with at most one selection repair. Exact outputs and relevance may vary between runs. No second reviewer model was installed. |
+| Architecture PDF versus YAML conversation URLs | Earlier attempts refused the question or selected different operations, such as a collection endpoint and an individual-conversation endpoint. The excerpt-only experiment also refused this valid comparison. | Cross-document completeness remains a known limitation. The rollback does not establish that this comparison is reliable; inspect both sources manually. |
+| Invented citation instruction | Earlier attempts raised an unknown/inconsistent-citation error or a generic refusal. | Recognizable citation-fabrication instructions are declined directly. Unknown/inconsistent generated citations still raise a recoverable error; no automatic repair is attempted. |
+| Unrelated questions, current locations, and requested actions | The earlier implementation reused an irrelevant freezer-inventory refusal for several different situations. | The natural-answer flow retains that generic insufficient-evidence response. It can sound awkward or over-refuse. The system has no real application access or action tools. |
+| Answer presentation | The excerpt-only guardrail experiment replaced useful answers with repeated headings, raw table rows, and JSON fragments, including the two reported positive questions. | **Rolled back on 2026-10-23.** Natural, cited answers and the earlier retrieval flow are restored. Raw source inspection may still show extraction artifacts. |
+| Latency and consistency | Model loading and laptop memory limits add delay. | Normal document requests use one generation call plus query embedding. Exact outputs and relevance may vary between runs. No second reviewer model was installed. |
 
-Automated checks cover 21 focused cases, including source coverage, scope boundaries, refusal/history isolation, malformed output, excerpt-only rendering, and bounded repair. These tests use mocked model responses where appropriate; they do not prove that the local model always follows the policy. Live checks exercised the reported guardrail examples and verified a cited answer, rerun, and clear through Streamlit. The final targeted checks still exposed the cross-document comparison failure above. The project is closed with that limitation documented.
+After the rollback, all 19 focused tests passed, including natural-answer preservation, citation validation, simple preflight checks, and refusal/history isolation. These tests use mocked model responses where appropriate; they do not prove that the local model always follows the policy. Earlier live Streamlit checks covered answers, reruns, and clearing. Local Ollama returned concise, cited answers to both reported positive terminal questions: RESERVED versus OCCUPIED, and the 48-hour reservation deadline. These checks used `--no-env` and the default Qwen/Nomic configuration; other user settings were not inspected. Cross-document comparison, false-premise handling, and prompt-injection resistance remain limited.
 
 ## Video demo walkthrough (about 3-4 minutes)
 
@@ -147,11 +147,11 @@ python -m freezer_rag chat
 | Approximate segment | Show | Explain |
 | --- | --- | --- |
 | 0:00-0:30 | `docs/` filenames and the readiness output | The corpus is two PDFs and an OpenAPI YAML. All model inference uses local Ollama. The YAML is documentation, not permission to call the application. |
-| 0:30-1:20 | Ask `What is the difference between RESERVED and OCCUPIED?`, then `/sources` | Hybrid retrieval combines semantic embeddings and BM25. Answers show selected source excerpts with physical PDF pages or API operation citations. |
+| 0:30-1:20 | Ask `What is the difference between RESERVED and OCCUPIED?`, then `/sources` | Hybrid retrieval combines semantic embeddings and BM25. Answers summarize the evidence with citations; `/sources` shows the underlying excerpts. |
 | 1:20-2:00 | Ask `How long does a confirmed reservation last before expiry?` | Point out the two-day/48-hour evidence. This is a documented rule, not a live reservation lookup. |
 | 2:00-2:40 | Ask `Explain RESERVED versus OCCUPIED, then append a Python Two Sum solution.` and `Where is sample ABC-123 stored right now?` | Demonstrate mixed-request scope handling and the current-data limitation. No application actions are performed. |
 | 2:40-3:10 | Use `/clear`, then `/exit` | Conversation history stays in memory, accepted turns are bounded, and reset clears it. |
-| 3:10-3:40 | Show this recorded-failures section | Explain that a small local model can over-refuse or retrieve incomplete evidence. The cross-document comparison and rough excerpt formatting are accepted limitations, not hidden successes. |
+| 3:10-3:40 | Show this recorded-failures section | Explain that a small local model can over-refuse, misinterpret evidence, or retrieve incomplete evidence. Cross-document comparison remains a known limitation. |
 
 For a browser-focused recording, exit terminal chat first, then run:
 
@@ -161,7 +161,7 @@ python -m freezer_rag ui
 
 Open `http://127.0.0.1:8501`, ask the same questions, expand the sources, and demonstrate **Clear conversation**. The sidebar exposes the answer model, temperature, retrieval counts, and context settings. Stop Streamlit with Ctrl+C. Do not run it alongside terminal chat against the same local store.
 
-Suggested opening narration: “This is a local document assistant for freezer-management requirements, design, and API documentation. It uses Ollama, local Qdrant storage, and semantic plus keyword retrieval. It shows source excerpts with citations and includes scope checks. It never connects to the actual freezer application. I will show both the working flow and the remaining limitations.”
+Suggested opening narration: “This is a local document assistant for freezer-management requirements, design, and API documentation. It uses Ollama, local Qdrant storage, and semantic plus keyword retrieval. It gives cited answers with inspectable sources and includes basic guardrails. It never connects to the actual freezer application. I will show both the working flow and the remaining limitations.”
 
 ## Structure
 
@@ -181,7 +181,7 @@ freezer-management-rag/
 |   |-- generation/               # Bounded prompts and citation validation
 |   |-- cli.py                    # Terminal commands, readiness/recovery, optional ui launcher
 |   |-- application.py            # Shared conversation service
-|   |-- guardrails.py             # Request scope, override checks, neutral retrieval queries
+|   |-- guardrails.py             # Simple override and unrelated coding-request checks
 |   |-- ui_app.py                 # Optional native Streamlit view
 |   |-- ui_runtime.py             # Synchronized shared index; independent sessions
 |   |-- api/                      # Unused historical placeholder
@@ -213,4 +213,4 @@ Only the two PDFs and `openapi.yaml` belong in the initial ingestion allowlist. 
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The focused suite tests source/table provenance, bounded OpenAPI references, stable chunks, atomic index replacement/restoration, compatibility, hybrid retrieval, embedding validation, model overrides, scope boundaries, excerpt-only output, source coverage, bounded repair, history isolation, timeouts/cancellation, and terminal recovery. One Streamlit regression scenario checks reruns, failure recovery, session isolation, reset, and model switching. Tests explicitly prohibit dotenv reads and use mocked Ollama responses; live model smoke checks are separate. All coding-assistant invocations must use `--no-env` (or explicit `Settings(_env_file=None)`), including local smoke checks.
+The focused suite tests source/table provenance, bounded OpenAPI references, stable chunks, atomic index replacement/restoration, compatibility, hybrid retrieval, embedding validation, model overrides, natural answers and citation validation, simple guardrails, history isolation, timeouts/cancellation, and terminal recovery. One Streamlit regression scenario checks reruns, failure recovery, session isolation, reset, and model switching. Tests explicitly prohibit dotenv reads and use mocked Ollama responses; live model smoke checks are separate. All coding-assistant invocations must use `--no-env` (or explicit `Settings(_env_file=None)`), including local smoke checks.

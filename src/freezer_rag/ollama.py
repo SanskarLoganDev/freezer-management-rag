@@ -84,7 +84,7 @@ class Ollama:
             )
         return info
 
-    def chat(self, messages: list[dict], schema: dict, *, num_predict: int | None = None) -> str:
+    def chat(self, messages: list[dict], schema: dict) -> str:
         settings = self.settings
         info = self.check_chat_model()
         payload = {
@@ -95,9 +95,7 @@ class Ollama:
             "keep_alive": settings.llm_keep_alive,
             "options": {
                 "num_ctx": settings.llm_num_ctx,
-                "num_predict": min(num_predict, settings.llm_num_predict)
-                if num_predict is not None
-                else settings.llm_num_predict,
+                "num_predict": settings.llm_num_predict,
                 "temperature": settings.llm_temperature,
             },
         }
