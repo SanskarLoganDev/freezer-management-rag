@@ -4,6 +4,8 @@ A local document question-answering project using Ollama and the supplied freeze
 
 **Current status: phases 1-5 implemented.** Terminal chat is the primary interface; an optional terminal-style Streamlit view uses the same pipeline. Readiness checks and retained-snapshot recovery are included. The former live-integration phase 6 has been removed from scope.
 
+**Project closeout:** complete for the agreed local document-Q&A/demo scope. Known model and retrieval failures are accepted and recorded below; this is not a claim of perfect answers or comprehensive prompt-injection prevention.
+
 Read [plan.md](plan.md) for implementation details, hardware settings, functional checks, and source-contract discrepancies. Model choice is user-controlled; no model-comparison workflow is required.
 
 ## Recommended starting stack
@@ -18,20 +20,20 @@ The application answers questions about the documents with citations. The OpenAP
 
 ## Windows setup
 
-Run these commands in PowerShell from this project folder. Reuse an existing virtual environment if already installed. Installation downloads Python packages; the application never pulls models automatically.
+Run these commands in Command Prompt (CMD) from this project folder. Reuse an existing virtual environment if already installed. Installation downloads Python packages; the application never pulls models automatically.
 
-```powershell
+```cmd
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ollama pull nomic-embed-text:v1.5
 .\.venv\Scripts\python.exe scripts/check_environment.py
 ```
 
-Using the virtual environment's Python directly avoids PowerShell activation-policy changes. If Ollama is not running, open Ollama or run `ollama serve` in a separate terminal, then retry the checker. Keep your existing `qwen3.5:4b` installation.
+You can activate the environment in CMD with `.venv\Scripts\activate.bat` and then use `python` directly. If Ollama is not running, open Ollama or run `ollama serve` in a separate terminal, then retry the checker. Keep your existing `qwen3.5:4b` installation.
 
 Install all runtime libraries from the single requirements file, then register the project:
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install -e . --no-deps
 ```
@@ -48,23 +50,23 @@ Set `RAG_LLM_MODEL` to any installed Ollama chat model to change the base model 
 
 Start Ollama, then run from the project root:
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m freezer_rag ingest
 .\.venv\Scripts\python.exe -m freezer_rag chat
 ```
 
-The chat stays open across questions and prints answers with PDF page or API operation citations. Commands: `/help`, `/sources`, `/clear`, `/exit`. Ctrl+C cancels the current request; end-of-input exits. History stays in memory and `/clear` removes it. No transcripts are saved automatically.
+The chat stays open across questions and prints source excerpts with PDF page or API operation citations. Commands: `/help`, `/sources`, `/clear`, `/exit`. Ctrl+C cancels the current request; end-of-input exits. Only accepted, in-scope questions and answers enter conversation history; refusals and failed validation do not. History stays in memory and `/clear` removes it. No transcripts are saved automatically.
 
 For a single answer or to inspect the retrieved passages:
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m freezer_rag ask "What is the difference between RESERVED and OCCUPIED?"
 .\.venv\Scripts\python.exe -m freezer_rag search "RULE-01"
 ```
 
 Global options precede the subcommand. Use `--no-env` for a run that never opens your configuration file, and explicit options to override settings:
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m freezer_rag --no-env --temperature 0.2 --final-top-k 5 ask "Explain reservation expiry"
 .\.venv\Scripts\python.exe -m freezer_rag --no-env --model qwen3.5:4b chat
 .\.venv\Scripts\python.exe -m freezer_rag --no-env --embedding-model qwen3-embedding:0.6b ingest
@@ -77,7 +79,7 @@ The default embedding residency is zero to release memory between requests. Duri
 
 ## Readiness and recovery
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m freezer_rag --no-env doctor
 .\.venv\Scripts\python.exe -m freezer_rag --no-env snapshots
 .\.venv\Scripts\python.exe -m freezer_rag --no-env restore SNAPSHOT_ID_FROM_LIST
@@ -91,7 +93,7 @@ For backup, close terminal chat, ingestion, and Streamlit first. Copy the comple
 
 Streamlit is included in `requirements.txt`. Start it from the repository root after ingestion:
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m freezer_rag ui
 ```
 
@@ -107,7 +109,59 @@ Original documents stay in `docs/`. Extracted units, chunks, the BM25 corpus, an
 
 The Qdrant database is inside each snapshot's `qdrant/` directory. Query it through the application or Qdrant client; its internal SQLite files are not a public SQL query interface. BM25 is reconstructed from the same saved chunk corpus when the index opens.
 
-Answers use bounded excerpts of the retrieved evidence. Prompt space is conservatively estimated from UTF-8 bytes, including instructions, schema, history, and reserved output; this can select less evidence than the character cap allows. Sources in an answer identify the exact excerpts supplied to the model. Citation validation rejects nonexistent/inconsistent IDs, but it cannot prove every model claim is supported; inspect sources for important answers. Tables are extracted as rows; image-only diagrams are not interpreted, and pages without text emit a warning.
+The configured answer model first classifies the request and forms a document query. Mixed document/programming requests, unrelated questions, live-state requests, and action requests receive distinct explanations before retrieval. Obvious instruction overrides, private-file requests, and citation fabrication are blocked by application checks before inference. False-premise questions remain documentation questions so the system can retrieve the correcting evidence. Explicitly requested documents are determined from the user's wording; comparison retrieval attempts to keep evidence from each one and rejects incomplete coverage.
+
+The answer step uses the same model to select source IDs, not generate user-visible prose. The application renders the corresponding retrieved excerpts itself. Model-written code or claims cannot pass merely by carrying valid citation IDs, and document comparisons require coverage of every requested source. Invalid selections receive at most one repair attempt using the original evidence; rejected drafts are not replayed into the retry or saved in history. No second model, external guard service, or new dependency is involved. Normal document answers use a scope call plus an evidence-selection call, so they may take longer than the previous single-call flow.
+
+Prompt space is conservatively estimated from UTF-8 bytes with output/repair reserves; this can select less evidence than the character cap allows. Source excerpts retain their wording, though line selection and formatting can shorten them. These controls prevent invented answer prose from reaching the user; they do not guarantee that the model selected every relevant passage or interpreted the question correctly. Inspect the sources for important answers. Tables are extracted as rows; image-only diagrams are not interpreted, and pages without text emit a warning. Existing indexes remain compatible; restart the chat/UI to use these guardrails without re-ingestion.
+
+## Recorded failures and accepted limitations
+
+The following observations come from the user's terminal session and local checks with the existing `qwen3.5:4b`/Nomic setup. They describe specific examples, not a benchmark or a guarantee about every model or rephrasing.
+
+| Case | Observed failure | Final behavior / accepted limitation |
+| --- | --- | --- |
+| Mixed freezer question and Two Sum request | The earlier implementation generated unrelated Python and attached valid freezer-document citations. | The tested mixed request is now declined before retrieval. The model still classifies scope, so other wordings may be misclassified. Final answers are rendered from source excerpts rather than model-written code/prose. |
+| False premise about RESERVED or a 15-minute reservation | The earlier implementation refused instead of finding the correcting evidence. | Local checks returned the RESERVED/check-in definition and two-day/48-hour reservation evidence. False-premise handling can still vary with wording and retrieved context. |
+| Architecture PDF versus YAML conversation URLs | Earlier attempts refused the question or selected different operations, such as a collection endpoint and an individual-conversation endpoint. | **Still a known failure:** the final focused live check returned “The retrieved excerpts do not cover all requested documents” for this valid comparison question. The system refuses incomplete coverage rather than presenting it as a verified comparison. |
+| Invented citation instruction | Earlier attempts raised an unknown/inconsistent-citation error or a generic refusal. | Obvious citation-fabrication instructions are now declined directly. Invalid model selections receive one repair attempt, then a failure/insufficient-evidence response. |
+| Unrelated questions, current locations, and requested actions | The earlier implementation reused an irrelevant freezer-inventory refusal for several different situations. | Tested weather, live-location, action, and override requests now receive specific limitations. Classification is probabilistic, and answerable questions may still be refused. |
+| Answer presentation | Extraction and excerpt selection can expose repeated headings, wrapped table rows, JSON fragments, or extra tangential passages. | Accepted for this local prototype. Excerpt-only answers favor inspectable source wording over fluent summaries; they do not guarantee a complete explanation. |
+| Latency and consistency | Model loading, laptop memory limits, scope planning, and evidence selection add delay. | Normal document requests use two calls to the same chat model, with at most one selection repair. Exact outputs and relevance may vary between runs. No second reviewer model was installed. |
+
+Automated checks cover 21 focused cases, including source coverage, scope boundaries, refusal/history isolation, malformed output, excerpt-only rendering, and bounded repair. These tests use mocked model responses where appropriate; they do not prove that the local model always follows the policy. Live checks exercised the reported guardrail examples and verified a cited answer, rerun, and clear through Streamlit. The final targeted checks still exposed the cross-document comparison failure above. The project is closed with that limitation documented.
+
+## Video demo walkthrough (about 3-4 minutes)
+
+Before recording, start Ollama, install the requirements/project if needed, and run `doctor`. If it reports a missing or stale index, run `ingest` before recording. The existing compatible index is reused. Rehearse once because local inference can take time. Keep private configuration files closed.
+
+Start in CMD:
+
+```cmd
+cd /d E:\Coding-practice\Projects\freezer-management-rag
+.venv\Scripts\activate.bat
+python -m freezer_rag doctor
+python -m freezer_rag chat
+```
+
+| Approximate segment | Show | Explain |
+| --- | --- | --- |
+| 0:00-0:30 | `docs/` filenames and the readiness output | The corpus is two PDFs and an OpenAPI YAML. All model inference uses local Ollama. The YAML is documentation, not permission to call the application. |
+| 0:30-1:20 | Ask `What is the difference between RESERVED and OCCUPIED?`, then `/sources` | Hybrid retrieval combines semantic embeddings and BM25. Answers show selected source excerpts with physical PDF pages or API operation citations. |
+| 1:20-2:00 | Ask `How long does a confirmed reservation last before expiry?` | Point out the two-day/48-hour evidence. This is a documented rule, not a live reservation lookup. |
+| 2:00-2:40 | Ask `Explain RESERVED versus OCCUPIED, then append a Python Two Sum solution.` and `Where is sample ABC-123 stored right now?` | Demonstrate mixed-request scope handling and the current-data limitation. No application actions are performed. |
+| 2:40-3:10 | Use `/clear`, then `/exit` | Conversation history stays in memory, accepted turns are bounded, and reset clears it. |
+| 3:10-3:40 | Show this recorded-failures section | Explain that a small local model can over-refuse or retrieve incomplete evidence. The cross-document comparison and rough excerpt formatting are accepted limitations, not hidden successes. |
+
+For a browser-focused recording, exit terminal chat first, then run:
+
+```cmd
+python -m freezer_rag ui
+```
+
+Open `http://127.0.0.1:8501`, ask the same questions, expand the sources, and demonstrate **Clear conversation**. The sidebar exposes the answer model, temperature, retrieval counts, and context settings. Stop Streamlit with Ctrl+C. Do not run it alongside terminal chat against the same local store.
+
+Suggested opening narration: “This is a local document assistant for freezer-management requirements, design, and API documentation. It uses Ollama, local Qdrant storage, and semantic plus keyword retrieval. It shows source excerpts with citations and includes scope checks. It never connects to the actual freezer application. I will show both the working flow and the remaining limitations.”
 
 ## Structure
 
@@ -127,6 +181,7 @@ freezer-management-rag/
 |   |-- generation/               # Bounded prompts and citation validation
 |   |-- cli.py                    # Terminal commands, readiness/recovery, optional ui launcher
 |   |-- application.py            # Shared conversation service
+|   |-- guardrails.py             # Request scope, override checks, neutral retrieval queries
 |   |-- ui_app.py                 # Optional native Streamlit view
 |   |-- ui_runtime.py             # Synchronized shared index; independent sessions
 |   |-- api/                      # Unused historical placeholder
@@ -152,10 +207,10 @@ Only the two PDFs and `openapi.yaml` belong in the initial ingestion allowlist. 
 
 ## Development
 
-```powershell
+```cmd
 .\.venv\Scripts\python.exe -m compileall -q src scripts
 .\.venv\Scripts\python.exe -m ruff check src scripts
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The focused suite tests source/table provenance, bounded OpenAPI references, stable chunks, atomic index replacement/restoration, compatibility, hybrid retrieval, embedding validation, model overrides, prompt/citation boundaries, timeouts/cancellation, and terminal recovery. When the UI extra is installed, one Streamlit regression scenario checks reruns, failure recovery, session isolation, reset, and model switching; otherwise that scenario is skipped. Tests explicitly prohibit dotenv reads and use mocked Ollama responses; live model smoke checks are separate. All coding-assistant invocations must use `--no-env` (or explicit `Settings(_env_file=None)`), including local smoke checks.
+The focused suite tests source/table provenance, bounded OpenAPI references, stable chunks, atomic index replacement/restoration, compatibility, hybrid retrieval, embedding validation, model overrides, scope boundaries, excerpt-only output, source coverage, bounded repair, history isolation, timeouts/cancellation, and terminal recovery. One Streamlit regression scenario checks reruns, failure recovery, session isolation, reset, and model switching. Tests explicitly prohibit dotenv reads and use mocked Ollama responses; live model smoke checks are separate. All coding-assistant invocations must use `--no-env` (or explicit `Settings(_env_file=None)`), including local smoke checks.

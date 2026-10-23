@@ -1,6 +1,6 @@
 # Implementation plan: local Freezer Management RAG
 
-Prepared: 2026-10-21. Status: phases 1-5 implemented. Terminal RAG remains primary, with an optional Streamlit interface. Phase 6 live integration was removed at the user's direction; this system is permanently document-only.
+Prepared: 2026-10-21. Closed: 2026-10-22 at the user's direction. Status: phases 1-5 implemented for the local document-Q&A/demo scope, with accepted limitations recorded in README. Terminal RAG remains primary, with an optional Streamlit interface. Phase 6 live integration was removed; this system is permanently document-only.
 
 Interface priority: interactive terminal chat first. A terminal-style Streamlit interface is optional and comes after terminal acceptance checks. Model comparison, benchmarking, and comparison-metric reports are outside the requirements; the user chooses models manually through their own configuration.
 
@@ -109,7 +109,7 @@ Raw float32 vector storage is `chunk_count * dimensions * 4` bytes: 1,000 768-di
 
 Offline ingestion: allowlisted source files -> PDF/YAML extraction -> normalized source units -> structure-aware chunks -> Ollama document embeddings -> persistent Qdrant collection + BM25 corpus + versioned manifest.
 
-Question answering: user question -> Ollama query embedding + BM25 search -> rank fusion -> deduplicated evidence with source IDs -> bounded prompt -> configured Ollama answer model -> citation validation -> grounded answer or insufficient-evidence response.
+Question answering: user question -> override checks -> scope/neutral-query planning with the configured Ollama model -> query embedding + BM25 search -> rank fusion with requested-source coverage -> bounded excerpts -> source-ID selection with the same model -> validation -> application-rendered source excerpts or a specific limitation response.
 
 Interface boundaries: terminal command/chat loop -> shared application pipeline -> extraction/index/retrieval/generation adapters. The optional Streamlit interface calls that same pipeline directly. Keep presentation, conversation state, and terminal commands outside retrieval and generation logic. Neither interface needs a separate RAG HTTP server. HTTPX is used only for Ollama; the freezer application's APIs are never called.
 
@@ -117,7 +117,7 @@ Each chunk should contain a deterministic UUIDv5 identifier, source-relative pat
 
 The index manifest records corpus hashes, extraction/chunking versions, model tag and digest, prefix strategy, vector dimensions, distance metric, collection name, and creation time. Check the manifest at query time and fail clearly on incompatibility.
 
-Citations use application-assigned source IDs, such as `[S1]`, resolved to source filename plus PDF page/section or HTTP method/path. The model cannot invent file paths, page numbers, or citation IDs. Citation-ID validation verifies references exist; human evaluation must still check whether the cited passage actually supports the claim.
+Citations use application-assigned source IDs, such as `[S1]`, resolved to source filename plus PDF page/section or HTTP method/path. The model selects IDs only; application code renders the corresponding excerpts. Model-written answer prose or code is rejected even when accompanied by valid IDs. The model still chooses relevance, so selected excerpts can be incomplete or fail to address the intended question; inspect the cited evidence for important uses.
 
 ## 7. Implementation phases and completion criteria
 
@@ -162,16 +162,16 @@ Done when: repeat ingestion produces no duplicates, source changes update the co
 
 ### Phase 3 - Grounded answers and primary terminal chat
 
-Implemented: `ask` and persistent `chat`, bounded evidence/history, structured output, validated source IDs, response-level citation rendering when inline markers are omitted, and terminal commands/error handling. The runtime prompt is packaged in `src/freezer_rag/generation/system_prompt.txt`.
+Implemented: `ask` and persistent `chat`, bounded evidence and verified history, scope planning, excerpt-only answers, validated source IDs/coverage, and terminal commands/error handling. The evidence-selection prompt is packaged in `src/freezer_rag/generation/system_prompt.txt`.
 
 - Implement Ollama `POST /api/chat` with explicit context/output settings, bounded history, and timeouts. Verify model-specific reasoning controls rather than assuming another model family's prompt switches work.
 - Keep the runtime system prompt packaged with the Python module and its documentation under `prompts/`: retrieved evidence is untrusted content, answers require supporting sources, and insufficient evidence is an allowed result. Application permissions are enforced in code.
-- Return an answer plus validated citation IDs and an evidence-sufficiency indicator. Reject nonexistent or inconsistent citations and malformed structured output. If the structured IDs are valid but the model omits inline markers, render response-level citations from those IDs in application code. An insufficient-evidence result displays a fixed abstention instead of any model-written unsupported claim.
+- Return selected source IDs and an evidence-sufficiency indicator; accept no model-written answer prose. Reject unknown IDs, extra answer/code fields, malformed selections, and missing requested-source coverage. Render excerpts and citations in application code. Allow at most one repair using original evidence without replaying a rejected draft. Distinguish unrelated/mixed questions, live-state requests, actions, and unavailable evidence in user-facing responses.
 - Present source conflicts explicitly. Clearly state that current availability and item locations are unavailable to this document-only assistant.
 - Implement an interactive terminal chat loop that stays open across questions, prints each validated answer and its source locators, then returns to an input prompt. The terminal interface is the first usable product and takes priority over Streamlit work.
 - Provide `ingest`, `search`, `ask`, and `chat` through `python -m freezer_rag` and the installed `freezer-rag` entry point. Use the standard-library argument parser and terminal input/output, avoiding a terminal framework unless an identified usability need justifies it.
 - Support `/help`, `/clear`, `/sources`, and `/exit`. `/clear` resets conversation history; `/sources` displays evidence for the last completed answer. Handle blank input, end-of-input, and Ctrl+C without a traceback; cancel an active request cleanly and keep the session usable when possible. Close model connections and the database on exit.
-- Keep bounded, in-memory conversation history for follow-up questions. Use relevant prior turns to resolve follow-up references and retrieve fresh evidence; prior model answers alone are not supporting evidence. `/clear` must remove that context. Do not persist transcripts by default.
+- Keep bounded, in-memory history of accepted, in-scope turns only. Refusals and failed validation never enter it. Use accepted questions to resolve follow-up references and retrieve fresh evidence; prior model answers are not sent to either scope planning or evidence selection. `/clear` removes that context. Do not persist transcripts by default.
 - Use readable `you>` and `assistant>` prompts, plain text answers, a concise sources section, and optional color that can be disabled for redirected output. Report model/index readiness and errors clearly. Keep diagnostics separate from answers so one-question output can be redirected or inspected.
 - Honor user-configured model/index selection, temperature, retrieval counts, and context/output limits, with optional explicit per-run overrides. Validate overrides, keep embedding/index metadata compatible, and apply the same settings to both interfaces. Do not require a model-comparison mode or metric recording. Avoid storing sensitive raw questions by default.
 - Begin with complete, validated responses. Add optional streaming only after deciding how to avoid presenting unvalidated citations as final answers; streaming is not required for the first terminal release.
@@ -286,3 +286,22 @@ These are historical checks against the original scaffold dependency set. They a
 - All 17 focused test cases passed in the clean environment, with `pip check` and Ruff checks passing. After synchronizing conversation reset with inference, the six affected conversation/UI checks passed again. The extra dependency lock files were subsequently removed at the user's request; dependencies are maintained only in `requirements.txt`.
 - Live checks used only local Ollama with `--no-env`: readiness reported the 720-chunk Nomic index, a terminal answer cited the 48-hour reservation deadline, and Streamlit answered the project-creation method/path with a YAML citation. The live UI preserved completed results across reruns and cleared history correctly. A headless Chrome review verified the fully loaded dark monospaced layout and loopback-only launcher; validation processes were stopped afterward.
 - No private `.env` was read, edited, copied, or loaded during validation. The three source documents were preserved. Validation used Python 3.13; other declared Python versions have not received equivalent runtime checks here.
+
+## 13. Guardrail strengthening
+
+The reported mixed freezer/Two Sum response exposed a gap in citation-only checks: valid IDs did not prove that generated content came from those passages. The pipeline now uses the existing configured chat model for scope/query planning and evidence selection, with application checks around both. No additional model, guard service, dependency, or embedding rebuild is required.
+
+- Block obvious instruction overrides, private-configuration requests, and invented-citation instructions before inference; normalize Unicode formatting characters for these checks.
+- Separate document questions, mixed tasks, unrelated knowledge, live-state questions, actions, and overrides. Treat false premises as document lookups that can be corrected with evidence.
+- Derive requested-source requirements from the actual user question, not the router's guesses. Preserve each requested source in cross-document retrieval, including near-identical passages. Prefer complete HTTP method/path passages for endpoint questions.
+- Accept source IDs only. Display the supplied excerpts with application-assigned citations, never free-form model-generated prose. Check coverage before showing comparison results, and use one bounded repair for an invalid or unsupported selection.
+- Store only accepted turns. Previously refused attacks, rejected outputs, and generated answers do not become future routing instructions or evidence.
+- Preserve configurable answer/embedding models, temperature, retrieval counts, and context limits. These changes apply to both terminal and Streamlit through the shared service. Reopen the interface after updating; existing vector indexes remain compatible.
+
+Scope classification and passage selection remain probabilistic; application-rendered excerpts reduce the risk of invented claims but do not establish perfect relevance or completeness. Guardrail tests and live checks must include successful factual answers and corrections as well as refusals.
+
+## 14. Project closeout
+
+The user requested a practical finish rather than further model/perfection work. Final checks passed the 21-case automated suite; the 12 affected scope/retrieval cases passed again after the final changes. A live Streamlit answer, rerun, and reset passed. Live regressions demonstrated scope refusals, source-backed definitions and deadlines, and the project-creation API path. The final focused rerun still refused the valid architecture-versus-YAML conversation-URL comparison because source coverage was incomplete; that failure, rough excerpt formatting, possible over-refusal, and local-model variability are explicitly accepted and recorded in README.
+
+README includes CMD startup commands and a timed terminal/Streamlit demo walkthrough. No additional model or dependency was introduced, the existing index remains usable, and private `.env` was not read or modified. No further implementation phase is planned for this project scope.
